@@ -1,0 +1,4 @@
+**/__pycache__/
+pre-process/venv/
+pre-process/data/
+blocking/output/

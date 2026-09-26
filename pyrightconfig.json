@@ -1,0 +1,16 @@
+{
+  "include": [
+    "src",
+    "config",
+    "tests",
+    "benchmarks",
+    "generate_candidates.py",
+    "evaluate_metrics.py",
+    "analyze_metrics.py",
+    "run_tests.py"
+  ],
+  "extraPaths": [
+    "src",
+    "."
+  ]
+}
