@@ -9,6 +9,11 @@ import polars as pl
 from config.settings import NormalizerConfig
 from normalizers.aggressive import normalize_aggressive_name, extract_address_features
 from normalizers.moderate import normalize_moderate
+from normalizers.cleaner import (
+    build_clean_name_expr,
+    build_clean_address_expr,
+    build_clean_country_expr,
+)
 
 
 def process_dataframe(
@@ -25,6 +30,8 @@ def process_dataframe(
         - country (str)
 
     Appends feature columns:
+        - clean_name: Phase 0 fully expanded and standardized business name
+        - clean_address: Phase 0 fully expanded and standardized business address
         - agg_name: Suffix-stripped, alphabetically sorted core tokens (Track A)
         - agg_addr: Clean address tokens (Track A)
         - addr_nums: Sorted list of premise address integers (Track A)
@@ -35,11 +42,13 @@ def process_dataframe(
     if config is None:
         config = NormalizerConfig()
 
-    # Ensure required columns are present and clean nulls
+    # Ensure required columns are present and clean nulls + standard country
     df = df.with_columns([
         pl.col("business_name").fill_null("").cast(pl.Utf8),
         pl.col("business_address").fill_null("").cast(pl.Utf8),
-        pl.col("country").fill_null("").cast(pl.Utf8).str.strip_chars().str.to_uppercase(),
+        build_clean_country_expr("country").alias("country"),
+        build_clean_name_expr("business_name").alias("clean_name"),
+        build_clean_address_expr("business_address").alias("clean_address"),
     ])
 
     names = df["business_name"].to_list()

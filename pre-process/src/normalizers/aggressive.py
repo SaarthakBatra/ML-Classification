@@ -12,6 +12,7 @@ Designed for high-recall deterministic blocking keys, inverted indices, and toke
 """
 
 from typing import List, Tuple
+import re
 from normalizers.base import (
     strip_accents,
     clean_url_slug,
@@ -20,6 +21,7 @@ from normalizers.base import (
     RE_NON_ALPHANUM,
     RE_NUMERICS,
     ADDR_ABBREVIATIONS,
+    ORDINAL_EXPANSIONS,
     LITERAL_NULLS,
 )
 
@@ -40,6 +42,8 @@ def normalize_aggressive_name(name: str) -> str:
     text = clean_url_slug(text)
     text = text.replace('&', ' and ').replace('@', ' at ')
     text = text.lower()
+    # Acronym protection: remove dots with no replacement (I.B.M. -> ibm)
+    text = text.replace('.', '')
     text = RE_LEGAL_SUFFIXES.sub(' ', text)
     text = RE_NON_ALPHANUM.sub(' ', text)
 
@@ -67,6 +71,11 @@ def extract_address_features(address: str, max_digits: int = 6) -> Tuple[str, Li
     text = strip_accents(text)
     text = text.replace('&', ' and ').replace('@', ' at ')
     text = text.lower()
+    text = text.replace('.', '')
+
+    # Expand ordinals (first -> 1st, etc.)
+    for word, repl in ORDINAL_EXPANSIONS:
+        text = re.sub(rf'\b{word}\b', repl, text)
 
     # Expand common street and locality abbreviations
     for pattern, replacement in ADDR_ABBREVIATIONS:
