@@ -7,18 +7,18 @@ from typing import Dict, List
 import polars as pl
 
 from cyclic import CandidateRecord, CyclicCandidateGenerator, GenerationResult
-from retrievers import CharacterBM25Retriever, FaissSemanticRetriever, SentenceTransformerEncoder
+from retrievers import BGEM3Encoder, CharacterBM25Retriever, FaissSemanticRetriever
 
 
 @dataclass(frozen=True)
 class BlockingWorkflowConfig:
     preprocessed_dir: str
     output_dir: str
-    model_name: str = "paraphrase-multilingual-MiniLM-L12-v2"
+    model_name: str = "BAAI/bge-m3"
     batch_size: int = 256
     device: str = "auto"
     per_stream_batch_size: int = 20
-    max_seen_candidates: int = 60
+    max_seen_candidates: int = 90
     min_cycles_before_empty_stop: int = 3
 
 
@@ -30,7 +30,7 @@ def run_blocking_workflow(config: BlockingWorkflowConfig) -> Dict[str, object]:
     all_records: List[CandidateRecord] = []
     all_matches: Dict[str, List[str]] = {}
     country_summary: Dict[str, Dict[str, int]] = {}
-    encoder = SentenceTransformerEncoder(config.model_name, config.batch_size, device)
+    encoder = BGEM3Encoder(config.model_name, config.batch_size, device)
 
     for country, partition in manifest["partitions"].items():
         query_path = _partition_file(partition, f"Query_{country}_parquet")
@@ -46,11 +46,13 @@ def run_blocking_workflow(config: BlockingWorkflowConfig) -> Dict[str, object]:
                 cycle_counts={query_id: 0 for query_id in query_ids},
             )
         else:
-            lexical = CharacterBM25Retriever().fit(target_frame).bind_queries(query_frame)
+            lexical = CharacterBM25Retriever("addr_for_bm25").fit(target_frame).bind_queries(query_frame)
+            names = CharacterBM25Retriever("name_for_bm25").fit(target_frame).bind_queries(query_frame)
             semantic = FaissSemanticRetriever(encoder).fit(target_frame).bind_queries(query_frame)
             generator = CyclicCandidateGenerator(
                 lexical_retriever=lexical,
                 semantic_retriever=semantic,
+                name_retriever=names,
                 per_stream_batch_size=config.per_stream_batch_size,
                 max_seen_candidates=config.max_seen_candidates,
                 min_cycles_before_empty_stop=config.min_cycles_before_empty_stop,
@@ -67,13 +69,16 @@ def run_blocking_workflow(config: BlockingWorkflowConfig) -> Dict[str, object]:
         }
 
     candidate_path = os.path.join(config.output_dir, "candidate_pairs.tsv")
+    cycle_path = os.path.join(config.output_dir, "candidate_pairs_per_cycle.tsv")
     match_path = os.path.join(config.output_dir, "matching_results.tsv")
-    _write_candidate_pairs(candidate_path, all_records)
+    _write_candidate_pairs(candidate_path, all_records, all_matches)
+    _write_cycle_candidates(cycle_path, all_records)
     _write_matches(match_path, all_matches)
     summary = {
-        "workflow": "Blocking 1.0 dual-stream cyclic retrieval",
+        "workflow": "Blocking 1.0 three-stream cyclic retrieval",
         "preprocessed_dir": os.path.abspath(config.preprocessed_dir),
         "candidate_pairs_path": candidate_path,
+        "candidate_pairs_per_cycle_path": cycle_path,
         "matching_results_path": match_path,
         "classifier_status": "unscored; no feature-engineering or classifier stage is implemented",
         "countries": country_summary,
@@ -116,24 +121,31 @@ def _unscored_evaluator(_: str, __: List[CandidateRecord]) -> List[str]:
     return []
 
 
-def _write_candidate_pairs(path: str, records: List[CandidateRecord]) -> None:
+def _write_candidate_pairs(path: str, records: List[CandidateRecord], query_matches: Dict[str, List[str]]) -> None:
+    candidates_by_query: Dict[str, List[str]] = {}
+    for record in records:
+        candidates_by_query.setdefault(record.query_id, []).append(record.candidate_id)
     with open(path, "w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle, delimiter="\t")
-        writer.writerow(["source1_entity_id", "candidate_entity_id", "cycle", "lexical_rank", "semantic_rank"])
-        for record in records:
-            writer.writerow([
-                record.query_id,
-                record.candidate_id,
-                record.cycle,
-                record.lexical_rank or "",
-                record.semantic_rank or "",
-            ])
+        writer.writerow(["source1_entity_id", "candidate_entity_ids"])
+        for query_id in query_matches:
+            writer.writerow([query_id, ",".join(sorted(set(candidates_by_query.get(query_id, []))))])
+
+
+def _write_cycle_candidates(path: str, records: List[CandidateRecord]) -> None:
+    candidates_by_cycle: Dict[tuple[str, int], List[str]] = {}
+    for record in records:
+        candidates_by_cycle.setdefault((record.query_id, record.cycle), []).append(record.candidate_id)
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t")
+        writer.writerow(["source1_entity_id", "cycle_number", "candidate_entity_ids"])
+        for (query_id, cycle), candidate_ids in candidates_by_cycle.items():
+            writer.writerow([query_id, cycle, ",".join(candidate_ids)])
 
 
 def _write_matches(path: str, matched_ids_by_query: Dict[str, List[str]]) -> None:
     with open(path, "w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle, delimiter="\t")
-        writer.writerow(["source1_entity_id", "candidate_entity_id"])
+        writer.writerow(["source1_entity_id", "matched_entity_ids"])
         for query_id, candidate_ids in matched_ids_by_query.items():
-            for candidate_id in candidate_ids:
-                writer.writerow([query_id, candidate_id])
+            writer.writerow([query_id, ",".join(candidate_ids)])

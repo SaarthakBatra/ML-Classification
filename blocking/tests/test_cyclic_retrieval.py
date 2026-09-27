@@ -61,7 +61,7 @@ class TestCyclicCandidateGenerator(unittest.TestCase):
         )
         queries = pl.DataFrame({"entity_id": ["S1-1"], "clean_address": ["10 rue de la paix paris"]})
 
-        retriever = CharacterBM25Retriever().fit(targets).bind_queries(queries)
+        retriever = CharacterBM25Retriever("clean_address").fit(targets).bind_queries(queries)
 
         self.assertEqual(retriever.retrieve("S1-1", 2)[0], "S2-1")
 
@@ -70,7 +70,7 @@ class TestCyclicCandidateGenerator(unittest.TestCase):
         queries = pl.DataFrame({"entity_id": ["S1-1"], "clean_name": ["alpha coffee"]})
         encoder = CountingEncoder()
 
-        retriever = FaissSemanticRetriever(encoder).fit(targets).bind_queries(queries)
+        retriever = FaissSemanticRetriever(encoder, "clean_name").fit(targets).bind_queries(queries)
         retriever.retrieve("S1-1", 2)
         retriever.retrieve("S1-1", 2)
 
@@ -88,13 +88,13 @@ class TestCyclicCandidateGenerator(unittest.TestCase):
             with open(os.path.join(preprocessed_dir, "manifest.json"), "w", encoding="utf-8") as handle:
                 json.dump({"partitions": {"US": {"files": {"Query_US_parquet": query_path, "Target_US_parquet": target_path}}}}, handle)
 
-            original_encoder = workflow.SentenceTransformerEncoder
+            original_encoder = workflow.BGEM3Encoder
             original_lexical = workflow.CharacterBM25Retriever
             original_semantic = workflow.FaissSemanticRetriever
-            workflow.SentenceTransformerEncoder = lambda *args: object()
+            workflow.BGEM3Encoder = lambda *args: object()
             workflow.CharacterBM25Retriever = FixedRetriever
             workflow.FaissSemanticRetriever = FixedRetriever
-            self.addCleanup(setattr, workflow, "SentenceTransformerEncoder", original_encoder)
+            self.addCleanup(setattr, workflow, "BGEM3Encoder", original_encoder)
             self.addCleanup(setattr, workflow, "CharacterBM25Retriever", original_lexical)
             self.addCleanup(setattr, workflow, "FaissSemanticRetriever", original_semantic)
 
@@ -119,6 +119,17 @@ class TestCyclicCandidateGenerator(unittest.TestCase):
         self.assertEqual([record.cycle for record in records], [1, 1, 1, 2, 2, 2, 2, 3, 3])
         self.assertEqual(lexical.requests, [("S1-1", 2), ("S1-1", 5), ("S1-1", 9)])
         self.assertEqual(semantic.requests, [("S1-1", 2), ("S1-1", 5), ("S1-1", 9)])
+
+    def test_name_stream_promotes_three_stream_consensus(self):
+        address = RankedStream({"S1-1": ["S2-a", "S2-b"]})
+        semantic = RankedStream({"S1-1": ["S2-b", "S2-c"]})
+        name = RankedStream({"S1-1": ["S2-c", "S2-b"]})
+        generator = CyclicCandidateGenerator(address, semantic, name_retriever=name, per_stream_batch_size=2, max_seen_candidates=3)
+
+        result = generator.generate(["S1-1"], evaluator=lambda _, candidates: set())
+
+        self.assertEqual([record.candidate_id for record in result.records_by_query["S1-1"]], ["S2-b", "S2-c", "S2-a"])
+        self.assertEqual(result.records_by_query["S1-1"][0].name_rank, 2)
 
     def test_stops_after_third_empty_match_cycle(self):
         lexical = RankedStream({"S1-1": [f"S2-{index}" for index in range(20)]})

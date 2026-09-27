@@ -13,11 +13,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--preprocessed-dir", required=True)
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--model-name", default="paraphrase-multilingual-MiniLM-L12-v2")
+    parser.add_argument("--model-name", default="BAAI/bge-m3")
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
     parser.add_argument("--per-stream-batch-size", type=int, default=20)
-    parser.add_argument("--max-seen-candidates", type=int, default=60)
+    parser.add_argument("--max-seen-candidates", type=int, default=90)
     arguments = parser.parse_args()
     summary = run_blocking_workflow(
         BlockingWorkflowConfig(

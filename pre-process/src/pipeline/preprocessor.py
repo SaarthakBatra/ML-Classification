@@ -62,6 +62,12 @@ def clean_dataframe(
         exprs.append(pl.col("source").cast(pl.Utf8))
 
     cleaned = df.with_columns(exprs)
+    semantic_name = pl.col("business_name").fill_null("").cast(pl.Utf8).str.to_lowercase().str.replace_all(r"\s+", " ").str.strip_chars()
+    cleaned = cleaned.with_columns([
+        pl.when(semantic_name == "").then(pl.concat_str([pl.lit("nullname "), pl.col("entity_id")])).otherwise(semantic_name).alias("name_for_faiss"),
+        pl.col("clean_name").alias("name_for_bm25"),
+        pl.col("clean_address").alias("addr_for_bm25"),
+    ])
 
     if verbose:
         print(f"    Normalized {len(df):,} records in {time.time()-t0:.2f}s")

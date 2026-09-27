@@ -11,7 +11,8 @@ class TextEncoder(Protocol):
 
 
 class CharacterBM25Retriever:
-    def __init__(self, ngram_size: int = 3, k1: float = 1.5, b: float = 0.75) -> None:
+    def __init__(self, text_column: str, ngram_size: int = 3, k1: float = 1.5, b: float = 0.75) -> None:
+        self.text_column = text_column
         self.ngram_size = ngram_size
         self.k1 = k1
         self.b = b
@@ -23,7 +24,7 @@ class CharacterBM25Retriever:
 
     def fit(self, target_df: pl.DataFrame) -> "CharacterBM25Retriever":
         self.target_ids = target_df["entity_id"].cast(pl.Utf8).to_list()
-        texts = self._texts(target_df, "clean_address")
+        texts = self._texts(target_df, self.text_column)
         if not texts:
             return self
         vectorizer = CountVectorizer(analyzer="char_wb", ngram_range=(self.ngram_size, self.ngram_size))
@@ -44,7 +45,7 @@ class CharacterBM25Retriever:
         return self
 
     def bind_queries(self, query_df: pl.DataFrame) -> "CharacterBM25Retriever":
-        self.query_texts = dict(zip(query_df["entity_id"].cast(pl.Utf8).to_list(), self._texts(query_df, "clean_address")))
+        self.query_texts = dict(zip(query_df["entity_id"].cast(pl.Utf8).to_list(), self._texts(query_df, self.text_column)))
         return self
 
     def retrieve(self, query_id: str, count: int) -> List[str]:
@@ -67,29 +68,34 @@ class CharacterBM25Retriever:
         return [str(value).strip() for value in frame[column].fill_null("").to_list()]
 
 
-class SentenceTransformerEncoder:
+class BGEM3Encoder:
     def __init__(self, model_name: str, batch_size: int, device: str) -> None:
-        from sentence_transformers import SentenceTransformer
+        from FlagEmbedding import BGEM3FlagModel
 
         self.batch_size = batch_size
-        self.model = SentenceTransformer(model_name, device=device)
+        options = {"use_fp16": device == "cuda"}
+        if device == "cuda":
+            options["devices"] = ["cuda:0"]
+        self.model = BGEM3FlagModel(model_name, **options)
 
     def encode(self, texts: List[str]) -> np.ndarray:
         return np.ascontiguousarray(
             self.model.encode(
                 texts,
                 batch_size=self.batch_size,
-                show_progress_bar=False,
-                normalize_embeddings=True,
-                convert_to_numpy=True,
-            ),
+                max_length=256,
+                return_dense=True,
+                return_sparse=False,
+                return_colbert_vecs=False,
+            )["dense_vecs"],
             dtype=np.float32,
         )
 
 
 class FaissSemanticRetriever:
-    def __init__(self, encoder: TextEncoder) -> None:
+    def __init__(self, encoder: TextEncoder, text_column: str = "name_for_faiss") -> None:
         self.encoder = encoder
+        self.text_column = text_column
         self.target_ids: List[str] = []
         self.query_texts: Dict[str, str] = {}
         self.query_embeddings: Dict[str, np.ndarray] = {}
@@ -99,7 +105,7 @@ class FaissSemanticRetriever:
         import faiss
 
         self.target_ids = target_df["entity_id"].cast(pl.Utf8).to_list()
-        texts = self._texts(target_df, "clean_name")
+        texts = self._texts(target_df, self.text_column)
         if not texts:
             return self
         embeddings = self.encoder.encode(texts)
@@ -109,7 +115,7 @@ class FaissSemanticRetriever:
 
     def bind_queries(self, query_df: pl.DataFrame) -> "FaissSemanticRetriever":
         query_ids = query_df["entity_id"].cast(pl.Utf8).to_list()
-        texts = self._texts(query_df, "clean_name")
+        texts = self._texts(query_df, self.text_column)
         self.query_texts = dict(zip(query_ids, texts))
         if texts:
             embeddings = self.encoder.encode(texts)

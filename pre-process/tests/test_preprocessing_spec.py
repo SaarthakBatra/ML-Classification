@@ -133,6 +133,18 @@ class TestPreprocessingSpec(unittest.TestCase):
         self.assertEqual(cleaned["country"].to_list(), ["US", "FRANCE", "INDIA"])
         self.assertEqual(cleaned["source"].to_list(), ["S1", "S1", "S1"])
 
+    def test_blocking_representations_preserve_semantic_script_and_normalize_lexical_text(self):
+        cleaned = clean_dataframe(pl.DataFrame({
+            "entity_id": ["S1-1"],
+            "business_name": ["एसएस Food Pvt. Ltd."],
+            "business_address": ["12 Main St"],
+            "country": ["India"],
+        }), source_tag="S1")
+
+        self.assertEqual(cleaned["name_for_faiss"][0], "एसएस food pvt. ltd.")
+        self.assertEqual(cleaned["name_for_bm25"][0], cleaned["clean_name"][0])
+        self.assertEqual(cleaned["addr_for_bm25"][0], cleaned["clean_address"][0])
+
     def test_end_to_end_partitioning_pipeline(self):
         """Test complete pipeline execution with mock TSV files."""
         with tempfile.TemporaryDirectory() as tmp_dir:

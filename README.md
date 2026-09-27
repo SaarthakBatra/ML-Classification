@@ -20,7 +20,7 @@ candidate_pairs.tsv, matching_results.tsv, manifest.json
 
 ## 1. Preprocessing
 
-`run_preprocess.py` cleans the three source files, unions S2 and S3 into the target pool, normalizes country values, and writes separate query and target partitions for every country discovered in S1.
+`run_preprocess.py` cleans the three source files, unions S2 and S3 into the target pool, normalizes country values, and writes separate query and target partitions for every country discovered in S1. Each partition contains `name_for_faiss` (lowercased original script), `name_for_bm25`, and `addr_for_bm25`.
 
 For the provided test split:
 
@@ -48,20 +48,27 @@ The output directory contains a `manifest.json` that is the contract consumed by
 
 ## 2. Blocking
 
-`run_blocking.py` loads preprocessing's manifest. For each country, it builds a character 3-gram BM25 index over normalized addresses and a multilingual FAISS index over normalized names. It then retrieves candidates in cycles, blacklists candidates already evaluated for a query, promotes candidates retrieved by both streams, and stops when the index is exhausted, 60 candidates have been seen, or the third cycle produces no accepted matches.
+`run_blocking.py` loads preprocessing's manifest. For each country, it combines three independent retrieval streams: character 3-gram BM25-style search over normalized names, character 3-gram BM25-style search over normalized addresses, and BGE-M3 dense name search through FAISS. Candidates returned by more streams rank first. The default ceiling is 90 unseen candidates per query, not 20.
 
 ```bash
 pre-process/venv/bin/python run_blocking.py \
   --preprocessed-dir pre-process/data/preprocessed/test \
   --output-dir blocking/output/test \
-  --device cpu
+  --device cuda
 ```
 
-Use `--device auto` to select CUDA or Apple Silicon acceleration when available. The first run requires the multilingual sentence-transformer model to be available locally or downloadable by SentenceTransformers.
+For Kaggle, install the blocking dependencies first:
+
+```bash
+pip install -r blocking/requirements.txt
+```
+
+Use `--device cuda` on Kaggle. BGE-M3 weights are downloaded from Hugging Face on the first run.
 
 Blocking writes:
 
-- `candidate_pairs.tsv`: one row per retrieved candidate, with source ID, target ID, cycle, and stream ranks.
+- `candidate_pairs.tsv`: one row per S1 ID with all retrieved target IDs.
+- `candidate_pairs_per_cycle.tsv`: retrieval provenance by cycle.
 - `matching_results.tsv`: accepted matches. It is currently empty because feature engineering and the XGBoost evaluator are not implemented yet.
 - `manifest.json`: runtime summary and output locations.
 
